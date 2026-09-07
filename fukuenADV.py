@@ -117,7 +117,10 @@ def signup(email, password):
         clean_email = email.strip().lower()
         res = supabase.auth.sign_up({
             "email": clean_email,
-            "password": password
+            "password": password,
+            "options": {
+                "email_redirect_to": "https://fukuenadvai-myeehmugmhityrbesl6jjv.streamlit.app/"
+            }
         })
         return res
     except Exception as e:
@@ -274,6 +277,7 @@ def show_auth_dialog():
             new_email = st.text_input("メールアドレス", key="dlg_signup_email")
             new_password = st.text_input("パスワード (6文字以上)", type="password", key="dlg_signup_password")
             confirm_password = st.text_input("パスワード (確認用)", type="password", key="dlg_signup_confirm")
+            # [2025-11-21] 利用規約の表記ガイドに準拠
             agree_terms = st.checkbox("利用規約に同意する", key="dlg_chk_terms")
             submit_signup = st.form_submit_button("アカウントを作成する", use_container_width=True, type="primary")
             
@@ -298,8 +302,17 @@ def show_payment_dialog():
     user_id = st.session_state["user"]["id"] if st.session_state.get("user") else ""
     
     base_stripe_url = st.secrets["stripe"].get("STRIPE_PAYMENT_LINK", "#")
+    
+    # 決済完了後（success_url）やキャンセル後（cancel_url）にアプリへ戻すためのredirectパラメータを付与
+    # ※StripeのPayment Link側でカスタムの完了画面URLを設定していない場合、
+    #   URLクエリとして ?client_reference_id=... や prefilled_email を渡しつつ、
+    #   必要に応じてStripe側の仕様に合わせたリダイレクトを構成します。
     stripe_url = f"{base_stripe_url}?prefilled_email={user_email}&client_reference_id={user_id}"
     
+    #もしStripeのPayment Linkでリダイレクト先URL（redirect_url / after_completion）を指定したい場合は、
+    #Stripeダッシュボードの決済リンク編集画面（「確認画面の表示」>「確認ページを表示する」または「ウェブサイトにリダイレクトする」）
+    #にて、ご自身のアプリのURL（例: Streamlitの公開URL）を直接設定していただくのが最も確実です。
+
     st.link_button("決済画面へ進む（Stripe）", stripe_url, type="primary", use_container_width=True)
     if st.button("🔄 決済完了後にステータスを更新する", use_container_width=True):
         st.session_state["is_premium"] = check_access(user_email)
@@ -327,7 +340,6 @@ def show_delete_account_dialog():
     curr_email = st.session_state["user"]["email"]
     curr_id = st.session_state["user"]["id"]
 
-    # データベースからサブスクリプションの状態を取得
     sub_info = None
     try:
         clean_email = curr_email.strip().lower()
@@ -337,7 +349,6 @@ def show_delete_account_dialog():
     except Exception as e:
         st.error(f"契約情報の確認に失敗しました: {e}")
 
-    # 有料プラン契約中かつ自動更新が停止していない（cancel_at_period_end が False）場合は退会をブロック
     is_active = sub_info and sub_info.get("status") in ["active", "trialing"]
     cancel_at_period_end = sub_info.get("cancel_at_period_end", False) if sub_info else False
 
@@ -373,7 +384,6 @@ MAX_FREE_TURNS = 5
 # サイドバー管理
 st.sidebar.title("復縁アドバイザーT AI")
 
-# 会員状態表示
 if is_premium:
     st.sidebar.success(f"👑 有料プラン適用中\n{st.session_state['user']['email']}")
     stripe_portal = st.secrets.get("stripe", {}).get("STRIPE_PORTAL_URL", "#")
@@ -402,7 +412,6 @@ else:
 if st.sidebar.button("利用規約・特商法表記", use_container_width=True):
     show_tokusho_dialog()
 
-# 新規チャット作成
 st.sidebar.markdown("---")
 if st.sidebar.button("➕ 新しい相談を始める", use_container_width=True, type="primary"):
     new_thread_id = f"thread_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -411,14 +420,12 @@ if st.sidebar.button("➕ 新しい相談を始める", use_container_width=True
     st.session_state["thread_messages"][new_thread_id] = []
     st.rerun()
 
-# 初回スレッド自動生成
 if not st.session_state["current_thread_id"]:
     default_id = f"thread_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     st.session_state["chat_threads"].append(default_id)
     st.session_state["current_thread_id"] = default_id
     st.session_state["thread_messages"][default_id] = []
 
-# スレッド一覧の表示・切り替え
 st.sidebar.subheader("過去の相談履歴")
 for tid in reversed(st.session_state["chat_threads"]):
     messages_in_tid = st.session_state["thread_messages"].get(tid, [])
@@ -433,19 +440,16 @@ for tid in reversed(st.session_state["chat_threads"]):
         st.session_state["current_thread_id"] = tid
         st.rerun()
 
-# メイン画面処理
 current_tid = st.session_state["current_thread_id"]
 current_messages = st.session_state["thread_messages"].get(current_tid, [])
 
 st.title("復縁アドバイザーT リアルタイムAI相談室")
 st.caption("心理学・行動科学に基づき、元彼・元カノとの復縁に向けたアプローチ方法をいつでもアドバイスします。")
 
-# チャット履歴の描画
 for msg in current_messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# 質問制限の判定・制限動作
 if not is_premium and st.session_state["trial_chat_count"] >= MAX_FREE_TURNS:
     st.warning("無料お試し（5往復）の上限に達しました。続けて相談するには月額プラン（2,800円/月）へのご登録が必要です。")
     
@@ -465,11 +469,9 @@ else:
     if prompt:
         st.session_state["trial_chat_count"] += 1
         
-        # ユーザー発言の記録
         current_messages.append({"role": "user", "content": prompt})
         st.session_state["thread_messages"][current_tid] = current_messages
         
-        # データベースへ送信メッセージを保存
         if st.session_state.get("user"):
             save_chat_message(
                 st.session_state["user"]["id"],
@@ -479,7 +481,6 @@ else:
                 prompt
             )
         
-        # 画面更新用に会話IDを取得
         conv_id = st.session_state["dify_conv_ids"].get(current_tid, "")
         
         with st.chat_message("user"):
@@ -491,11 +492,9 @@ else:
                 st.session_state["dify_conv_ids"][current_tid] = new_conv_id
                 st.markdown(reply_text)
 
-        # AI回答の記録
         current_messages.append({"role": "assistant", "content": reply_text})
         st.session_state["thread_messages"][current_tid] = current_messages
         
-        # データベースへAI回答メッセージを保存
         if st.session_state.get("user"):
             save_chat_message(
                 st.session_state["user"]["id"],
